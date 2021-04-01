@@ -23,8 +23,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include <math.h>
-#include <string.h>
+
+#include "peakDetection.h"
+#include "nextion.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,20 +36,13 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ADC_SCALE (3.3 / 4095)
-#define NUMBER_OF_CONVERSION 1
 #define FILTER_LENGTH 20
-#define SAMPLE_LENGTH (200 * NUMBER_OF_CONVERSION)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
 float movingAvgFilter(int actualSample);
-
-float stddev(float data[], int len);
-float mean(float data[], int len);
-void thresholding(float y[], int signals[], int lag, float threshold, float influence);
 
 /* USER CODE END PM */
 
@@ -72,114 +67,24 @@ static void MX_USART1_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 int contAmostras = 0;
-int cont = 0;
+
 int cont2 = 0;
 //static long previousTime = 0;
+
 uint8_t adcDataReady;
 uint32_t adcDataDMA[NUMBER_OF_CONVERSION];
-float adcAvgData = 0;
-float adcData;
-//float adcDataSamples[SAMPLE_LENGTH];
-float adcAvgData2 = 0;
-float adcAvgData3 = 0;
-float contFiltered;
-uint8_t Cmd_End[3] = {0xFF, 0xFF, 0xFF};
 
-int signal[SAMPLE_LENGTH];
-
-void SendToProgressBar(char *obj, uint16_t value)
-{
-  char buf[30];
-  int len = sprintf(buf, "%s=%u", obj, value);
-  HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 100);
-  HAL_UART_Transmit(&huart1, Cmd_End, 3, 100);
-}
-
-void SendToGauge(char *obj, uint16_t value)
-{
-  char buf[30];
-
-  value += 315;
-  if (value >= 360)
-    value = value - 360;
-
-  int len = sprintf(buf, "%s=%u", obj, value);
-  HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 100);
-  HAL_UART_Transmit(&huart1, Cmd_End, 3, 100);
-}
-void SendToWave(char *obj, uint16_t value)
-{
-  char buf[30];
-  int len = sprintf(buf, "%s,%u", obj, value);
-  HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 1000);
-  HAL_UART_Transmit(&huart1, Cmd_End, 3, 1000);
-}
+//float adcData;                       //Usado no DMA
+float adcDataSamples[SAMPLE_LENGTH]; //Global para usar DMA
 
 int32_t map(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min, int32_t out_max)
 {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-void thresholding(float y[], int signals[], int lag, float threshold, float influence)
-{
-  memset(signals, 0, sizeof(float) * SAMPLE_LENGTH);
-  float filteredY[SAMPLE_LENGTH];
-  memcpy(filteredY, y, sizeof(float) * SAMPLE_LENGTH);
-  float avgFilter[SAMPLE_LENGTH];
-  float stdFilter[SAMPLE_LENGTH];
-
-  avgFilter[lag - 1] = mean(y, lag);
-  stdFilter[lag - 1] = stddev(y, lag);
-
-  for (int i = lag; i < SAMPLE_LENGTH; i++)
-  {
-    if (fabsf(y[i] - avgFilter[i - 1]) > threshold * stdFilter[i - 1])
-    {
-      if (y[i] > avgFilter[i - 1])
-      {
-        signals[i] = 1;
-      }
-      else
-      {
-        signals[i] = -1;
-      }
-      filteredY[i] = influence * y[i] + (1 - influence) * filteredY[i - 1];
-    }
-    else
-    {
-      signals[i] = 0;
-    }
-    avgFilter[i] = mean(filteredY + i - lag, lag);
-    stdFilter[i] = stddev(filteredY + i - lag, lag);
-  }
-}
-
-float mean(float data[], int len)
-{
-  float sum = 0.0, mean = 0.0;
-
-  int i;
-  for (i = 0; i < len; ++i)
-  {
-    sum += data[i];
-  }
-
-  mean = sum / len;
-  return mean;
-}
-
-float stddev(float data[], int len)
-{
-  float the_mean = mean(data, len);
-  float standardDeviation = 0.0;
-
-  int i;
-  for (i = 0; i < len; ++i)
-  {
-    standardDeviation += pow(data[i] - the_mean, 2);
-  }
-
-  return sqrt(standardDeviation / len);
+int __io_putchar(int ch){
+	HAL_UART_Transmit(&huart1, (uint8_t*)&ch, 1, 1000);
+	return ch;
 }
 
 /* USER CODE END 0 */
@@ -216,13 +121,17 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  float ant = 0;
-  int i = 0;
-  int lag = 8;
-  float threshold = 4;
-  float influence = 0.6;
-  float adcDataSamples[SAMPLE_LENGTH];
-  //float y[SAMPLE_LENGTH] = {1, 1, 1.1, 1, 0.9, 1, 1, 1.1, 1, 0.9, 1, 1.1, 1, 1, 0.9, 1, 1, 1.1, 1, 1, 1, 1, 1.1, 0.9, 1, 1.1, 1, 1, 0.9, 1, 1.1, 1, 1, 1.1, 1, 0.8, 0.9, 1, 1.2, 0.9, 1, 1, 1.1, 1.2, 1, 1.5, 1, 3, 2, 5, 3, 2, 1, 1, 1, 0.9, 1, 1, 3, 2.6, 4, 3, 3.2, 2, 1, 1, 0.8, 4, 4, 2, 2.5, 1, 1, 1};
+  float ant = 0; //Valor anterior mostrado no Ponteiro do display
+  //int i = 0;
+
+  //float adcDataSamples[SAMPLE_LENGTH];
+  int signal[SAMPLE_LENGTH]; //Vetor com a os sinais de pico
+  int peakQtd = 0;           //Quantidade de picos detectados
+
+  float progressBarValue1 = 0; //Valor convertido enviado para o display
+  float waveValue1 = 0;        //Valor convertido enviado para o display
+  float gaugeValue1 = 0;       //Valor convertido enviado para o display
+  float contFiltered;          //Contagem de pulsos com media movel
 
   HAL_ADCEx_Calibration_Start(&hadc1);
 
@@ -236,81 +145,56 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-
-
     do
     {
       //HAL_ADC_Start_DMA(&hadc1, adcDataDMA, NUMBER_OF_CONVERSION);
       //HAL_ADC_Start_IT(&hadc1);
 
-    	HAL_ADC_Start(&hadc1);
-    	  HAL_ADC_PollForConversion(&hadc1, 1);
-    	  if(HAL_ADC_GetValue(&hadc1) > 80){
-    		  adcDataSamples[contAmostras] = HAL_ADC_GetValue(&hadc1);
-    	  }
-    	  else{
-    		  adcDataSamples[contAmostras] = 0;
-    	  }
+      HAL_ADC_Start(&hadc1);
+      HAL_ADC_PollForConversion(&hadc1, 1);
+      if (HAL_ADC_GetValue(&hadc1) > 80)
+      {
+        adcDataSamples[contAmostras] = HAL_ADC_GetValue(&hadc1);
+      }
+      else
+      {
+        adcDataSamples[contAmostras] = 0;
+      }
 
-    	contAmostras++;
-    	HAL_Delay(4);
+      contAmostras++;
+      HAL_Delay(4);
 
     } while (contAmostras < SAMPLE_LENGTH);
-
     contAmostras = 0;
 
-    thresholding(adcDataSamples, signal, lag, threshold, influence);
+    thresholding(adcDataSamples, signal);
 
-    for (i = 0; i < SAMPLE_LENGTH; i++)
+    peakQtd = contPeak(signal);
+
+    contFiltered = movingAvgFilter(peakQtd * 10);
+
+
+    progressBarValue1 = map(contFiltered, 0, 60, 0, 100);
+    waveValue1 = map(contFiltered, 0, 60, 0, 180);
+    gaugeValue1 = map(contFiltered, 0, 60, 0, 270);
+
+    //char buf[30];
+    //printf(buf, "%s=%u", "j0.val", (int)progressBarValue1);
+    //printf("%u%u%u", 255,255,255);
+
+    SendToProgressBar("j0.val", (int)progressBarValue1);
+    SendToProgressBar("j1.val", (int)progressBarValue1);
+    SendToWave("add 2,0", (int)waveValue1);
+
+    if (gaugeValue1 != ant)
     {
-      if (signal[i] == 0 && signal[i + 1] == 1)
-      {
-        cont++;
-      }
-      /*if (signal[i] == 0 && signal[i + 1] == -1)
-      {
-        cont2++;
-      }
-      if(adcDataSamples[i] > 300){
-          	int top = 0;
-      }*/
+      ant = gaugeValue1;
+
+      SendToGauge("z0.val", gaugeValue1);
     }
+    peakQtd = 0;
 
-
-
-    /*if ((HAL_GetTick() - previousTime) >= 1000)
-    {
-      previousTime = HAL_GetTick();*/
-
-      contFiltered = movingAvgFilter(cont*10);
-
-      adcAvgData = map(contFiltered, 0, 60, 0, 100);
-      adcAvgData2 = map(contFiltered, 0, 60, 0, 180);
-      adcAvgData3 = map(contFiltered, 0, 60, 0, 270);
-
-      SendToProgressBar("j0.val", (int)adcAvgData);
-      SendToProgressBar("j1.val", (int)adcAvgData);
-      SendToWave("add 2,0", (int)adcAvgData2);
-
-      if (adcAvgData3 != ant)
-      {
-        ant = adcAvgData3;
-
-        SendToGauge("z0.val", adcAvgData3);
-      }
-      cont = 0;
-    //}
-
-    // if (cont > 0)
-    // {
-    //   cont = 0;
-    // }
-    // cont = 0;
-
-    //HAL_ADC_Start_DMA(&hadc1, adcData, NUMBER_OF_CONVERSION);
-    //SendToProgressBar("j1.val", 20);
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-
   }
   /* USER CODE END 3 */
 }
@@ -466,18 +350,19 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-float AvgWave = 0;
+//float AvgWave = 0;
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
-  int i;
-  for (i = 0; i < NUMBER_OF_CONVERSION; i++)
-  {
-    //adcDataSamples[contAmostras + i] = adcDataDMA[i];
-    //adcDataSamples[contAmostras+i] = map(adcDataDMA[i], 0, 4095, 0, 10);
-  }
 
-  contAmostras = contAmostras + NUMBER_OF_CONVERSION;
+  //adcDataSamples[contAmostras] = adcDataDMA[0];
+  //contAmostras++;
+
+  //for (i = 0; i < NUMBER_OF_CONVERSION; i++)
+  //{
+
+  //adcDataSamples[contAmostras+i] = map(adcDataDMA[i], 0, 4095, 0, 10);
+  //}
 
   /*float aux = 0;
   int i = 0;
