@@ -26,6 +26,7 @@
 
 #include "peakDetection.h"
 #include "nextion.h"
+#include "flash_page.h"
 
 /* USER CODE END Includes */
 
@@ -68,7 +69,12 @@ static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN 0 */
 int contAmostras = 0;
 
+uint32_t *data = "50";
+__IO uint32_t Rx_Data[4];  //Data from FLASH MEMORY
+
 int cont2 = 0;
+
+char Rxbuf[10];
 //static long previousTime = 0;
 
 uint8_t adcDataReady;
@@ -121,7 +127,7 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  float ant = 0; //Valor anterior mostrado no Ponteiro do display
+  //float ant = 0; //Valor anterior mostrado no Ponteiro do display
   //int i = 0;
 
   //float adcDataSamples[SAMPLE_LENGTH];
@@ -130,12 +136,19 @@ int main(void)
 
   float progressBarValue1 = 0; //Valor convertido enviado para o display
   float waveValue1 = 0;        //Valor convertido enviado para o display
-  float gaugeValue1 = 0;       //Valor convertido enviado para o display
+  //float gaugeValue1 = 0;       //Valor convertido enviado para o display
   float contFiltered;          //Contagem de pulsos com media movel
 
   HAL_ADCEx_Calibration_Start(&hadc1);
 
+  HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 5);
+
   /* USER CODE END 2 */
+
+  Flash_Write_Data(0x0801FC00 , data);
+
+  Flash_Read_Data(0x0801FC00, Rx_Data);
+
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -176,7 +189,7 @@ int main(void)
 
     progressBarValue1 = map(contFiltered, 0, 60, 0, 100);
     waveValue1 = map(contFiltered, 0, 60, 0, 180);
-    gaugeValue1 = map(contFiltered, 0, 60, 0, 270);
+    //gaugeValue1 = map(contFiltered, 0, 60, 0, 270);
 
     //char buf[30];
     //printf(buf, "%s=%u", "j0.val", (int)progressBarValue1);
@@ -186,12 +199,12 @@ int main(void)
     SendToProgressBar("j1.val", (int)progressBarValue1);
     SendToWave("add 2,0", (int)waveValue1);
 
-    if (gaugeValue1 != ant)
+    /*if (gaugeValue1 != ant)
     {
       ant = gaugeValue1;
 
       SendToGauge("z0.val", gaugeValue1);
-    }
+    }*/
     peakQtd = 0;
 
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
@@ -349,6 +362,26 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 5);
+
+	if(Rxbuf[0] == 0x24 && Rxbuf[4] == 0x25)
+	{
+		if(Rxbuf[2] == 0x0C){//Slider 0
+				SendText("n0", (uint16_t)Rxbuf[3]);
+		}
+		if(Rxbuf[2] == 0x05){//Slider 1
+				SendText("n1", (uint16_t)Rxbuf[3]);
+		}
+		if(Rxbuf[2] == 0x06){//Button save
+
+		}
+	}
+	//memset(Rxbuf, 0, sizeof(Rxbuf));
+//		   HAL_Delay(100);
+}
 
 //float AvgWave = 0;
 

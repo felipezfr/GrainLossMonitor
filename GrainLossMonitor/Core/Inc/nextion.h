@@ -11,6 +11,6 @@
 void SendToProgressBar(char *obj, uint16_t value);
 void SendToGauge(char *obj, uint16_t value);
 void SendToWave(char *obj, uint16_t value);
-
+void SendText(char *obj, uint16_t value);
 
 #endif /* INC_NEXTION_H_ */
