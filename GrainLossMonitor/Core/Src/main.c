@@ -38,6 +38,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define FILTER_LENGTH 20
+#define END_PAG63 0x08018C00 // Max (pag 63): 0x08018C00
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -69,12 +70,18 @@ static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN 0 */
 int contAmostras = 0;
 
-uint32_t *data = "50";
+uint16_t slider1 = 0;
+uint16_t slider1ant = 0;
+uint16_t slider2 = 0;
+uint16_t slider2ant = 0;
+
+
 __IO uint32_t Rx_Data[4];  //Data from FLASH MEMORY
 
 int cont2 = 0;
 
 char Rxbuf[10];
+char Rxbuf2[10];
 //static long previousTime = 0;
 
 uint8_t adcDataReady;
@@ -134,6 +141,8 @@ int main(void)
   int signal[SAMPLE_LENGTH]; //Vetor com a os sinais de pico
   int peakQtd = 0;           //Quantidade de picos detectados
 
+  int contConfigPage = 0;;
+
   float progressBarValue1 = 0; //Valor convertido enviado para o display
   float waveValue1 = 0;        //Valor convertido enviado para o display
   //float gaugeValue1 = 0;       //Valor convertido enviado para o display
@@ -141,14 +150,16 @@ int main(void)
 
   HAL_ADCEx_Calibration_Start(&hadc1);
 
-  HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 5);
+  //HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 8);
+
+
+
+  FLASH_le_16bits(END_PAG63, &slider1);//Le da flash o valor da ultima calibracao
+  FLASH_le_16bits(END_PAG63+2, &slider2);//Le da flash o valor da ultima calibracao
+
+
 
   /* USER CODE END 2 */
-
-  Flash_Write_Data(0x0801FC00 , data);
-
-  Flash_Read_Data(0x0801FC00, Rx_Data);
-
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -165,7 +176,7 @@ int main(void)
 
       HAL_ADC_Start(&hadc1);
       HAL_ADC_PollForConversion(&hadc1, 1);
-      if (HAL_ADC_GetValue(&hadc1) > 80)
+      if (HAL_ADC_GetValue(&hadc1) > slider2)
       {
         adcDataSamples[contAmostras] = HAL_ADC_GetValue(&hadc1);
       }
@@ -186,9 +197,15 @@ int main(void)
 
     contFiltered = movingAvgFilter(peakQtd * 10);
 
+    if(slider1 != 0){//Erro se for 0
+    	progressBarValue1 = map(contFiltered, 0, slider1, 0, 100);
+    	waveValue1 = map(contFiltered, 0, slider1, 0, 180);
 
-    progressBarValue1 = map(contFiltered, 0, 60, 0, 100);
-    waveValue1 = map(contFiltered, 0, 60, 0, 180);
+    	if(progressBarValue1 > 100)progressBarValue1 = 100;
+    	if(waveValue1 > 180)waveValue1 = 180;
+    }
+
+
     //gaugeValue1 = map(contFiltered, 0, 60, 0, 270);
 
     //char buf[30];
@@ -199,13 +216,67 @@ int main(void)
     SendToProgressBar("j1.val", (int)progressBarValue1);
     SendToWave("add 2,0", (int)waveValue1);
 
-    /*if (gaugeValue1 != ant)
-    {
-      ant = gaugeValue1;
-
-      SendToGauge("z0.val", gaugeValue1);
-    }*/
     peakQtd = 0;
+
+    GetPage();//Receber o numero da pagina atual
+    HAL_UART_Receive(&huart1,  (uint8_t*) Rxbuf, 5, 100);
+    if(Rxbuf[1] == 0x66 && Rxbuf[2] == 0x05 && Rxbuf[4] == 0xFF)//Pagina de calibracão
+    {
+
+    		GetVal("h0");//Recebe o valor do slider1
+    	    HAL_UART_Receive(&huart1,  (uint8_t*) Rxbuf, 8, 100);
+
+    	    if(Rxbuf[1] == 0x71 && Rxbuf[7] == 0xFF)
+    	    {
+    	    	slider1 = (uint16_t)Rxbuf[2];
+
+    	    	if(slider1 == 0)//Primeira vez que entrou na tela de calibragem
+    	    	{
+    	    		uint16_t slider1Flash;
+    	    		uint16_t slider2Flash;
+    	    		FLASH_le_16bits(END_PAG63, &slider1Flash);
+    	    		FLASH_le_16bits(END_PAG63+2, &slider2Flash);
+    	    		SendToSlider("h0", slider1Flash);//Seta os sliders para o valor que estava gravado na FLASH
+    	    		SendText("n0", slider1Flash);
+    	    		SendToSlider("h1", slider2Flash);
+    	    		SendText("n1", slider2Flash);
+    	    	}
+
+    	    	if(slider1 != slider1ant && slider1 != 0){//Somente escreve quando o slider foi atualizado e nao é a primeira vez que entra na tela
+    	    		FLASH_apaga(END_PAG63, 1);
+    	    		FLASH_escreve_16bits(END_PAG63, &slider1);
+    	    		FLASH_escreve_16bits(END_PAG63+2, &slider2);
+    	    	}
+
+    	    	slider1ant = slider1;
+
+    	    	//SendText("n0", (uint16_t)Rxbuf[2]);
+    	    }
+    	    memset(Rxbuf, 0, sizeof(Rxbuf));
+
+    	    GetVal("h1");//Recebe o valor do slider2
+    	    HAL_UART_Receive(&huart1,  (uint8_t*) Rxbuf, 8, 100);
+
+    	    if(Rxbuf[1] == 0x71 && Rxbuf[7] == 0xFF)
+    	    {
+    	    	slider2 = (uint16_t)Rxbuf[2];
+
+
+    	    	if(slider2 != slider2ant && slider2 != 0){//Somente escreve quando o slider foi atualizado e nao é a primeira vez que entra na tela
+    	    		FLASH_apaga(END_PAG63, 1);
+    	    		FLASH_escreve_16bits(END_PAG63, &slider1);
+    	    		FLASH_escreve_16bits(END_PAG63+2, &slider2);
+    	    	}
+
+    	    	slider2ant = slider2;
+    	        //SendText("n1", (uint16_t)Rxbuf[2]);
+    	    }
+
+    	    //contConfigPage++;
+
+    }
+    memset(Rxbuf, 0, sizeof(Rxbuf));//Zera o buffer
+
 
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
   }
@@ -365,7 +436,7 @@ static void MX_GPIO_Init(void)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-	HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 5);
+	//HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 8);
 
 	if(Rxbuf[0] == 0x24 && Rxbuf[4] == 0x25)
 	{

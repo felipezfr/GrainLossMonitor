@@ -47,3 +47,30 @@ void SendText(char *obj, uint16_t value)
   HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 1000);
   HAL_UART_Transmit(&huart1, Cmd_End, 3, 1000);
 }
+
+void GetVal(char *obj)
+{
+  char buf[30];
+  int len = sprintf(buf, "get %s.val", obj);
+  HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 1000);
+  HAL_UART_Transmit(&huart1, Cmd_End, 3, 1000);
+}
+
+void SendToSlider(char *obj, uint16_t value)
+{
+	char buf[30];
+	  int len = sprintf(buf, "%s.val=%u", obj, value);
+	  HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 1000);
+	  HAL_UART_Transmit(&huart1, Cmd_End, 3, 1000);
+}
+
+void GetPage()
+{
+  char buf[30];
+  int len = sprintf(buf, "sendme");
+  HAL_UART_Transmit(&huart1, (uint8_t *)buf, len, 1000);
+  HAL_UART_Transmit(&huart1, Cmd_End, 3, 1000);
+}
+
+
+
