@@ -44,12 +44,14 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
-float movingAvgFilter(int actualSample);
+float movingAvgFilter(int actualSample);//Filtro media movel ADC1
+float movingAvgFilter2(int actualSample);//Filtro media movel ADC2
 
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+ADC_HandleTypeDef hadc2;
 
 UART_HandleTypeDef huart1;
 
@@ -62,6 +64,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_ADC2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -70,29 +73,22 @@ static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN 0 */
 int contAmostras = 0;
 
-uint16_t slider1 = 0;
-uint16_t slider1ant = 0;
-uint16_t slider2 = 0;
-uint16_t slider2ant = 0;
-uint16_t filter_length = 0;
-uint16_t filter_lengthAnt = 0;
+uint16_t slider1 = 0;          //Valor do slider de calibracao 1
+uint16_t slider1ant = 0;       //Ultimo valor do slider de calibracao 1
+uint16_t slider2 = 0;          //Valor do slider de calibracao 2
+uint16_t slider2ant = 0;       //Ultimo valor do slider de calibracao 2
+uint16_t filter_length = 1;    //Valor do slider do filtro media movel
+uint16_t filter_lengthAnt = 0; //Ultimo valor do slider do filtro media movel
 
-static int filterVector[50];//Media movel buffer
-static long accSum;//Media movel soma
+static int filterVector[50];  //Media movel buffer
+static long accSum;           //Media movel soma
+static int filterVector2[50]; //Media movel buffer ADC2
+static long accSum2;          //Media movel soma ADC2
 
-__IO uint32_t Rx_Data[4]; //Data from FLASH MEMORY
+char Rxbuf[10]; //Buffer recebimento serial
 
-int cont2 = 0;
-
-char Rxbuf[10];
-char Rxbuf2[10];
-//static long previousTime = 0;
-
-uint8_t adcDataReady;
-uint32_t adcDataDMA[NUMBER_OF_CONVERSION];
-
-//float adcData;                       //Usado no DMA
-float adcDataSamples[SAMPLE_LENGTH]; //Global para usar DMA
+float adcDataSamples[SAMPLE_LENGTH];  //Global para usar DMA
+float adcDataSamples2[SAMPLE_LENGTH]; //Global para usar DMA
 
 int32_t map(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min, int32_t out_max)
 {
@@ -137,23 +133,24 @@ int main(void)
   MX_GPIO_Init();
   MX_ADC1_Init();
   MX_USART1_UART_Init();
+  MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
 
-  //float ant = 0; //Valor anterior mostrado no Ponteiro do display
-  //int i = 0;
-
-  //float adcDataSamples[SAMPLE_LENGTH];
   int signal[SAMPLE_LENGTH]; //Vetor com a os sinais de pico
   int peakQtd = 0;           //Quantidade de picos detectados
 
+  int signal2[SAMPLE_LENGTH]; //Vetor com a os sinais de pico ADC 2
+  int peakQtd2 = 0;           //Quantidade de picos detectados ADC 2
+
   float progressBarValue1 = 0; //Valor convertido enviado para o display
   float waveValue1 = 0;        //Valor convertido enviado para o display
-  //float gaugeValue1 = 0;       //Valor convertido enviado para o display
-  float contFiltered; //Contagem de pulsos com media movel
+  float contFiltered;          //Contagem de pulsos com media movel
+
+  float progressBarValue2 = 0; //Valor convertido enviado para o display ADC 2
+  float waveValue2 = 0;        //Valor convertido enviado para o display ADC 2
+  float contFiltered2;         //Contagem de pulsos com media movel ADC 2
 
   HAL_ADCEx_Calibration_Start(&hadc1);
-
-  //HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 8);
 
   FLASH_le_16bits(END_PAG63, &slider1);           //Le da flash o valor da ultima calibracao
   FLASH_le_16bits(END_PAG63 + 2, &slider2);       //Le da flash o valor da ultima calibracao
@@ -170,18 +167,27 @@ int main(void)
 
     do
     {
-      //HAL_ADC_Start_DMA(&hadc1, adcDataDMA, NUMBER_OF_CONVERSION);
-      //HAL_ADC_Start_IT(&hadc1);
 
       HAL_ADC_Start(&hadc1);
+      HAL_ADC_Start(&hadc2);
       HAL_ADC_PollForConversion(&hadc1, 1);
-      if (HAL_ADC_GetValue(&hadc1) > slider2*2)//Tamanho minimo do sinal
+      HAL_ADC_PollForConversion(&hadc2, 1);
+      if (HAL_ADC_GetValue(&hadc1) > slider2 * 2) //Tamanho minimo do sinal
       {
         adcDataSamples[contAmostras] = HAL_ADC_GetValue(&hadc1);
       }
       else
       {
         adcDataSamples[contAmostras] = 0;
+      }
+
+      if (HAL_ADC_GetValue(&hadc2) > slider2 * 2) //Tamanho minimo do sinal
+      {
+        adcDataSamples2[contAmostras] = HAL_ADC_GetValue(&hadc2);
+      }
+      else
+      {
+        adcDataSamples2[contAmostras] = 0;
       }
 
       contAmostras++;
@@ -191,13 +197,15 @@ int main(void)
     contAmostras = 0;
 
     thresholding(adcDataSamples, signal);
-
     peakQtd = contPeak(signal);
+    thresholding(adcDataSamples2, signal2);
+    peakQtd2 = contPeak(signal2);
 
     contFiltered = movingAvgFilter(peakQtd * 10);
+    contFiltered2 = movingAvgFilter2(peakQtd2 * 10);
 
-    if (slider1 != 0)
-    { //Erro se for 0
+    if (slider1 != 0) //Erro se fizer um map de 0
+    {
       progressBarValue1 = map(contFiltered, 0, slider1, 0, 100);
       waveValue1 = map(contFiltered, 0, slider1, 0, 180);
 
@@ -205,23 +213,27 @@ int main(void)
         progressBarValue1 = 100;
       if (waveValue1 > 180)
         waveValue1 = 180;
+
+      progressBarValue2 = map(contFiltered2, 0, slider1, 0, 100);
+      waveValue2 = map(contFiltered2, 0, slider1, 0, 180);
+
+      if (progressBarValue2 > 100)
+        progressBarValue2 = 100;
+      if (waveValue2 > 180)
+        waveValue2 = 180;
     }
 
-    //gaugeValue1 = map(contFiltered, 0, 60, 0, 270);
-
-    //char buf[30];
-    //printf(buf, "%s=%u", "j0.val", (int)progressBarValue1);
-    //printf("%u%u%u", 255,255,255);
-
     SendToProgressBar("j0.val", (int)progressBarValue1);
-    SendToProgressBar("j1.val", (int)progressBarValue1);
+    SendToProgressBar("j1.val", (int)progressBarValue2);
     SendToWave("add 2,0", (int)waveValue1);
+    SendToWave("add 3,0", (int)waveValue2);
 
     peakQtd = 0;
+    peakQtd2 = 0;
 
     GetPage(); //Receber o numero da pagina atual
     HAL_UART_Receive(&huart1, (uint8_t *)Rxbuf, 5, 100);
-    if (Rxbuf[1] == 0x66 && Rxbuf[2] == 0x05 && Rxbuf[4] == 0xFF) //Pagina de calibracão
+    if ((Rxbuf[1] == 0x66 && Rxbuf[2] == 0x03 && Rxbuf[4] == 0xFF)) //Pagina de calibracão
     {
 
       GetVal("h0"); //Recebe o valor do slider1
@@ -255,8 +267,6 @@ int main(void)
         }
 
         slider1ant = slider1;
-
-        //SendText("n0", (uint16_t)Rxbuf[2]);
       }
       memset(Rxbuf, 0, sizeof(Rxbuf));
 
@@ -275,10 +285,7 @@ int main(void)
         }
 
         slider2ant = slider2;
-        //SendText("n1", (uint16_t)Rxbuf[2]);
       }
-
-      //contConfigPage++;
     }
     GetVal("h2"); //Recebe o valor do slider2
     HAL_UART_Receive(&huart1, (uint8_t *)Rxbuf, 8, 100);
@@ -293,22 +300,20 @@ int main(void)
         FLASH_escreve_16bits(END_PAG63 + 2, &slider2);
         FLASH_escreve_16bits(END_PAG63 + 4, &filter_length);
         memset(filterVector, 0, sizeof(filterVector)); //Zera o buffer da media movel
-        accSum = 0;
+        accSum = 0;//Zera soma da media movel
+        memset(filterVector2, 0, sizeof(filterVector2)); //Zera o buffer da media movel ADC2
+        accSum2 = 0;//Zera soma da media movel ADC2
       }
 
       filter_lengthAnt = filter_length;
-      //SendText("n1", (uint16_t)Rxbuf[2]);
     }
-
-    //contConfigPage++;
   }
 
   memset(Rxbuf, 0, sizeof(Rxbuf)); //Zera o buffer
 
   HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
 }
-  /* USER CODE END 3 */
-
+/* USER CODE END 3 */
 
 /**
   * @brief System Clock Configuration
@@ -336,8 +341,7 @@ void SystemClock_Config(void)
   }
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
@@ -397,7 +401,50 @@ static void MX_ADC1_Init(void)
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
+}
 
+/**
+  * @brief ADC2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC2_Init(void)
+{
+
+  /* USER CODE BEGIN ADC2_Init 0 */
+
+  /* USER CODE END ADC2_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC2_Init 1 */
+
+  /* USER CODE END ADC2_Init 1 */
+  /** Common config
+  */
+  hadc2.Instance = ADC2;
+  hadc2.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc2.Init.ContinuousConvMode = DISABLE;
+  hadc2.Init.DiscontinuousConvMode = DISABLE;
+  hadc2.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc2.Init.NbrOfConversion = 1;
+  if (HAL_ADC_Init(&hadc2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC2_Init 2 */
+
+  /* USER CODE END ADC2_Init 2 */
 }
 
 /**
@@ -430,7 +477,6 @@ static void MX_USART1_UART_Init(void)
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
-
 }
 
 /**
@@ -456,80 +502,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
 }
 
 /* USER CODE BEGIN 4 */
-/*
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  //HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 8);
-
-  if (Rxbuf[0] == 0x24 && Rxbuf[4] == 0x25)
-  {
-    if (Rxbuf[2] == 0x0C)
-    { //Slider 0
-      SendText("n0", (uint16_t)Rxbuf[3]);
-    }
-    if (Rxbuf[2] == 0x05)
-    { //Slider 1
-      SendText("n1", (uint16_t)Rxbuf[3]);
-    }
-    if (Rxbuf[2] == 0x06)
-    { //Button save
-    }
-  }
-  //memset(Rxbuf, 0, sizeof(Rxbuf));
-  //		   HAL_Delay(100);
-}*/
-
-//float AvgWave = 0;
-
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
-{
-
-  //adcDataSamples[contAmostras] = adcDataDMA[0];
-  //contAmostras++;
-
-  //for (i = 0; i < NUMBER_OF_CONVERSION; i++)
-  //{
-
-  //adcDataSamples[contAmostras+i] = map(adcDataDMA[i], 0, 4095, 0, 10);
-  //}
-
-  /*float aux = 0;
-  int i = 0;
-  for(i=0; i < NUMBER_OF_CONVERSION; i++){
-	  aux += adcData[i];
-  }
-  adcAvgData = aux/(float)NUMBER_OF_CONVERSION;*/
-
-  //adcAvgData = adcData[0];
-  /*
-  if (adcAvgData > 2000)
-  {
-    cont++;
-  }
-
-  if ((HAL_GetTick() - previousTime) >= 1000)
-  {
-    previousTime = HAL_GetTick();
-
-    adcAvgData2 = map(cont, 0, 5000, 0, 150);
-    adcAvgData = map(cont, 0, 5000, 0, 100);
-
-    SendToProgressBar("j0.val", (int)adcAvgData);
-    SendToWave("add 2,0", (int)adcAvgData2);
-
-    cont = 0;
-  }*/
-}
 
 float movingAvgFilter(int actualSample)
 {
   static int i;
-
-
 
   accSum = accSum - filterVector[i] + actualSample;
 
@@ -539,6 +518,20 @@ float movingAvgFilter(int actualSample)
     i = 0;
 
   return (float)accSum / (float)filter_length;
+}
+
+float movingAvgFilter2(int actualSample2)
+{
+  static int j;
+
+  accSum2 = accSum2 - filterVector2[j] + actualSample2;
+
+  filterVector2[j] = actualSample2;
+
+  if (++j >= filter_length)
+    j = 0;
+
+  return (float)accSum2 / (float)filter_length;
 }
 
 /* USER CODE END 4 */
@@ -555,7 +548,7 @@ void Error_Handler(void)
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
