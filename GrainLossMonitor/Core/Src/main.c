@@ -37,7 +37,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FILTER_LENGTH 20
+// #define FILTER_LENGTH 20
 #define END_PAG63 0x08018C00 // Max (pag 63): 0x08018C00
 /* USER CODE END PD */
 
@@ -74,9 +74,13 @@ uint16_t slider1 = 0;
 uint16_t slider1ant = 0;
 uint16_t slider2 = 0;
 uint16_t slider2ant = 0;
+uint16_t filter_length = 0;
+uint16_t filter_lengthAnt = 0;
 
+static int filterVector[50];//Media movel buffer
+static long accSum;//Media movel soma
 
-__IO uint32_t Rx_Data[4];  //Data from FLASH MEMORY
+__IO uint32_t Rx_Data[4]; //Data from FLASH MEMORY
 
 int cont2 = 0;
 
@@ -95,9 +99,10 @@ int32_t map(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min, int32_t 
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-int __io_putchar(int ch){
-	HAL_UART_Transmit(&huart1, (uint8_t*)&ch, 1, 1000);
-	return ch;
+int __io_putchar(int ch)
+{
+  HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 1000);
+  return ch;
 }
 
 /* USER CODE END 0 */
@@ -141,24 +146,18 @@ int main(void)
   int signal[SAMPLE_LENGTH]; //Vetor com a os sinais de pico
   int peakQtd = 0;           //Quantidade de picos detectados
 
-  int contConfigPage = 0;;
-
   float progressBarValue1 = 0; //Valor convertido enviado para o display
   float waveValue1 = 0;        //Valor convertido enviado para o display
   //float gaugeValue1 = 0;       //Valor convertido enviado para o display
-  float contFiltered;          //Contagem de pulsos com media movel
+  float contFiltered; //Contagem de pulsos com media movel
 
   HAL_ADCEx_Calibration_Start(&hadc1);
 
   //HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 8);
 
-
-
-  FLASH_le_16bits(END_PAG63, &slider1);//Le da flash o valor da ultima calibracao
-  FLASH_le_16bits(END_PAG63+2, &slider2);//Le da flash o valor da ultima calibracao
-
-
-
+  FLASH_le_16bits(END_PAG63, &slider1);           //Le da flash o valor da ultima calibracao
+  FLASH_le_16bits(END_PAG63 + 2, &slider2);       //Le da flash o valor da ultima calibracao
+  FLASH_le_16bits(END_PAG63 + 4, &filter_length); //Le da flash o valor da ultima calibracao
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -176,7 +175,7 @@ int main(void)
 
       HAL_ADC_Start(&hadc1);
       HAL_ADC_PollForConversion(&hadc1, 1);
-      if (HAL_ADC_GetValue(&hadc1) > slider2)
+      if (HAL_ADC_GetValue(&hadc1) > slider2*2)//Tamanho minimo do sinal
       {
         adcDataSamples[contAmostras] = HAL_ADC_GetValue(&hadc1);
       }
@@ -197,14 +196,16 @@ int main(void)
 
     contFiltered = movingAvgFilter(peakQtd * 10);
 
-    if(slider1 != 0){//Erro se for 0
-    	progressBarValue1 = map(contFiltered, 0, slider1, 0, 100);
-    	waveValue1 = map(contFiltered, 0, slider1, 0, 180);
+    if (slider1 != 0)
+    { //Erro se for 0
+      progressBarValue1 = map(contFiltered, 0, slider1, 0, 100);
+      waveValue1 = map(contFiltered, 0, slider1, 0, 180);
 
-    	if(progressBarValue1 > 100)progressBarValue1 = 100;
-    	if(waveValue1 > 180)waveValue1 = 180;
+      if (progressBarValue1 > 100)
+        progressBarValue1 = 100;
+      if (waveValue1 > 180)
+        waveValue1 = 180;
     }
-
 
     //gaugeValue1 = map(contFiltered, 0, 60, 0, 270);
 
@@ -218,70 +219,96 @@ int main(void)
 
     peakQtd = 0;
 
-    GetPage();//Receber o numero da pagina atual
-    HAL_UART_Receive(&huart1,  (uint8_t*) Rxbuf, 5, 100);
-    if(Rxbuf[1] == 0x66 && Rxbuf[2] == 0x05 && Rxbuf[4] == 0xFF)//Pagina de calibracão
+    GetPage(); //Receber o numero da pagina atual
+    HAL_UART_Receive(&huart1, (uint8_t *)Rxbuf, 5, 100);
+    if (Rxbuf[1] == 0x66 && Rxbuf[2] == 0x05 && Rxbuf[4] == 0xFF) //Pagina de calibracão
     {
 
-    		GetVal("h0");//Recebe o valor do slider1
-    	    HAL_UART_Receive(&huart1,  (uint8_t*) Rxbuf, 8, 100);
+      GetVal("h0"); //Recebe o valor do slider1
+      HAL_UART_Receive(&huart1, (uint8_t *)Rxbuf, 8, 100);
+      if (Rxbuf[1] == 0x71 && Rxbuf[7] == 0xFF)
+      {
+        slider1 = (uint16_t)Rxbuf[2];
 
-    	    if(Rxbuf[1] == 0x71 && Rxbuf[7] == 0xFF)
-    	    {
-    	    	slider1 = (uint16_t)Rxbuf[2];
+        if (slider1 == 0) //Primeira vez que entrou na tela de calibragem
+        {
+          uint16_t slider1Flash;
+          uint16_t slider2Flash;
+          uint16_t filter_lengthFlash;
+          FLASH_le_16bits(END_PAG63, &slider1Flash);
+          FLASH_le_16bits(END_PAG63 + 2, &slider2Flash);
+          FLASH_le_16bits(END_PAG63 + 4, &filter_lengthFlash);
+          SendToSlider("h0", slider1Flash); //Seta os sliders para o valor que estava gravado na FLASH
+          SendText("n0", slider1Flash);
+          SendToSlider("h1", slider2Flash);
+          SendText("n1", slider2Flash);
+          SendToSlider("h2", filter_lengthFlash);
+          SendText("n2", filter_lengthFlash);
+        }
 
-    	    	if(slider1 == 0)//Primeira vez que entrou na tela de calibragem
-    	    	{
-    	    		uint16_t slider1Flash;
-    	    		uint16_t slider2Flash;
-    	    		FLASH_le_16bits(END_PAG63, &slider1Flash);
-    	    		FLASH_le_16bits(END_PAG63+2, &slider2Flash);
-    	    		SendToSlider("h0", slider1Flash);//Seta os sliders para o valor que estava gravado na FLASH
-    	    		SendText("n0", slider1Flash);
-    	    		SendToSlider("h1", slider2Flash);
-    	    		SendText("n1", slider2Flash);
-    	    	}
+        if (slider1 != slider1ant && slider1 != 0)
+        { //Somente escreve quando o slider foi atualizado e nao é a primeira vez que entra na tela
+          FLASH_apaga(END_PAG63, 1);
+          FLASH_escreve_16bits(END_PAG63, &slider1);
+          FLASH_escreve_16bits(END_PAG63 + 2, &slider2);
+          FLASH_escreve_16bits(END_PAG63 + 4, &filter_length);
+        }
 
-    	    	if(slider1 != slider1ant && slider1 != 0){//Somente escreve quando o slider foi atualizado e nao é a primeira vez que entra na tela
-    	    		FLASH_apaga(END_PAG63, 1);
-    	    		FLASH_escreve_16bits(END_PAG63, &slider1);
-    	    		FLASH_escreve_16bits(END_PAG63+2, &slider2);
-    	    	}
+        slider1ant = slider1;
 
-    	    	slider1ant = slider1;
+        //SendText("n0", (uint16_t)Rxbuf[2]);
+      }
+      memset(Rxbuf, 0, sizeof(Rxbuf));
 
-    	    	//SendText("n0", (uint16_t)Rxbuf[2]);
-    	    }
-    	    memset(Rxbuf, 0, sizeof(Rxbuf));
+      GetVal("h1"); //Recebe o valor do slider2
+      HAL_UART_Receive(&huart1, (uint8_t *)Rxbuf, 8, 100);
+      if (Rxbuf[1] == 0x71 && Rxbuf[7] == 0xFF)
+      {
+        slider2 = (uint16_t)Rxbuf[2];
 
-    	    GetVal("h1");//Recebe o valor do slider2
-    	    HAL_UART_Receive(&huart1,  (uint8_t*) Rxbuf, 8, 100);
+        if (slider2 != slider2ant && slider2 != 0)
+        { //Somente escreve quando o slider foi atualizado e nao é a primeira vez que entra na tela
+          FLASH_apaga(END_PAG63, 1);
+          FLASH_escreve_16bits(END_PAG63, &slider1);
+          FLASH_escreve_16bits(END_PAG63 + 2, &slider2);
+          FLASH_escreve_16bits(END_PAG63 + 4, &filter_length);
+        }
 
-    	    if(Rxbuf[1] == 0x71 && Rxbuf[7] == 0xFF)
-    	    {
-    	    	slider2 = (uint16_t)Rxbuf[2];
+        slider2ant = slider2;
+        //SendText("n1", (uint16_t)Rxbuf[2]);
+      }
 
-
-    	    	if(slider2 != slider2ant && slider2 != 0){//Somente escreve quando o slider foi atualizado e nao é a primeira vez que entra na tela
-    	    		FLASH_apaga(END_PAG63, 1);
-    	    		FLASH_escreve_16bits(END_PAG63, &slider1);
-    	    		FLASH_escreve_16bits(END_PAG63+2, &slider2);
-    	    	}
-
-    	    	slider2ant = slider2;
-    	        //SendText("n1", (uint16_t)Rxbuf[2]);
-    	    }
-
-    	    //contConfigPage++;
-
+      //contConfigPage++;
     }
-    memset(Rxbuf, 0, sizeof(Rxbuf));//Zera o buffer
+    GetVal("h2"); //Recebe o valor do slider2
+    HAL_UART_Receive(&huart1, (uint8_t *)Rxbuf, 8, 100);
+    if (Rxbuf[1] == 0x71 && Rxbuf[7] == 0xFF)
+    {
+      filter_length = (uint16_t)Rxbuf[2];
 
+      if (filter_length != filter_lengthAnt && filter_length != 0)
+      { //Somente escreve quando o slider foi atualizado e nao é a primeira vez que entra na tela
+        FLASH_apaga(END_PAG63, 1);
+        FLASH_escreve_16bits(END_PAG63, &slider1);
+        FLASH_escreve_16bits(END_PAG63 + 2, &slider2);
+        FLASH_escreve_16bits(END_PAG63 + 4, &filter_length);
+        memset(filterVector, 0, sizeof(filterVector)); //Zera o buffer da media movel
+        accSum = 0;
+      }
 
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+      filter_lengthAnt = filter_length;
+      //SendText("n1", (uint16_t)Rxbuf[2]);
+    }
+
+    //contConfigPage++;
   }
-  /* USER CODE END 3 */
+
+  memset(Rxbuf, 0, sizeof(Rxbuf)); //Zera o buffer
+
+  HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
 }
+  /* USER CODE END 3 */
+
 
 /**
   * @brief System Clock Configuration
@@ -433,26 +460,28 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+/*
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-	//HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 8);
+  //HAL_UART_Receive_IT(&huart1,  (uint8_t*) Rxbuf, 8);
 
-	if(Rxbuf[0] == 0x24 && Rxbuf[4] == 0x25)
-	{
-		if(Rxbuf[2] == 0x0C){//Slider 0
-				SendText("n0", (uint16_t)Rxbuf[3]);
-		}
-		if(Rxbuf[2] == 0x05){//Slider 1
-				SendText("n1", (uint16_t)Rxbuf[3]);
-		}
-		if(Rxbuf[2] == 0x06){//Button save
-
-		}
-	}
-	//memset(Rxbuf, 0, sizeof(Rxbuf));
-//		   HAL_Delay(100);
-}
+  if (Rxbuf[0] == 0x24 && Rxbuf[4] == 0x25)
+  {
+    if (Rxbuf[2] == 0x0C)
+    { //Slider 0
+      SendText("n0", (uint16_t)Rxbuf[3]);
+    }
+    if (Rxbuf[2] == 0x05)
+    { //Slider 1
+      SendText("n1", (uint16_t)Rxbuf[3]);
+    }
+    if (Rxbuf[2] == 0x06)
+    { //Button save
+    }
+  }
+  //memset(Rxbuf, 0, sizeof(Rxbuf));
+  //		   HAL_Delay(100);
+}*/
 
 //float AvgWave = 0;
 
@@ -499,17 +528,17 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 float movingAvgFilter(int actualSample)
 {
   static int i;
-  static long accSum;
-  static int filterVector[FILTER_LENGTH];
+
+
 
   accSum = accSum - filterVector[i] + actualSample;
 
   filterVector[i] = actualSample;
 
-  if (++i >= FILTER_LENGTH)
+  if (++i >= filter_length)
     i = 0;
 
-  return (float)accSum / (float)FILTER_LENGTH;
+  return (float)accSum / (float)filter_length;
 }
 
 /* USER CODE END 4 */
