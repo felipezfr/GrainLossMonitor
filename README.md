@@ -1,4 +1,4 @@
-# GrainLossMonitor
+#Projeto de um monitor de perda de grão para colheitadeiras utilizando STM32 e display Nextion.
 
 ![WhatsApp Image 2021-06-28 at 11 13 53 PM (2)](https://user-images.githubusercontent.com/49997273/154382828-35602b97-695a-4301-84aa-37d535c186f2.jpeg)
 ![esquematico](https://user-images.githubusercontent.com/49997273/154382839-937a5ed9-24e1-4ac9-aa57-6912918a1e38.png)
